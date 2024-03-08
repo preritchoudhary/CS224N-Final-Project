@@ -41,9 +41,18 @@ class AdamW(Optimizer):
 
                 # State should be stored in this dictionary.
                 state = self.state[p]
-
+        
+                if not state:
+                    state['t'] = 0
+                    state['m'] = 0
+                    state['v'] = 0
+                    state['a_t'] = group["lr"]
+                
                 # Access hyperparameters from the `group` dictionary.
-                alpha = group["lr"]
+                beta_one = group["betas"][0] 
+                beta_two = group["betas"][1]
+                epsilon = group["eps"]
+                decay = group["weight_decay"]
 
                 # Complete the implementation of AdamW here, reading and saving
                 # your state in the `state` dictionary above.
@@ -58,9 +67,12 @@ class AdamW(Optimizer):
                 # 3. Update parameters (p.data).
                 # 4. Apply weight decay after the main gradient-based updates.
                 # Refer to the default project handout for more details.
-
-                ### TODO
-                raise NotImplementedError
-
+                state['t'] += 1
+                g_t = grad
+                state['m'] = beta_one * state['m'] + (1 - beta_one) * g_t
+                state['v'] = beta_two * state['v'] + (1 - beta_two) * torch.mul(g_t, g_t)
+                alpha_t = state['a_t'] * (((1 - beta_two**state['t'])**0.5)/(1 - beta_one**state['t']))
+                p.data = p.data - (alpha_t * state['m'])/(state['v']**0.5 + epsilon)
+                p.data = p.data - state['a_t'] * decay * p.data
 
         return loss

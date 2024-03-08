@@ -47,8 +47,9 @@ class BertSentimentClassifier(torch.nn.Module):
                 param.requires_grad = True
 
         # Create any instance variables you need to classify the sentiment of BERT embeddings.
-        ### TODO
-        raise NotImplementedError
+        ### 
+        self.dropout = torch.nn.Dropout(0.0)
+        self.linear_projection = torch.nn.Linear(self.bert.config.hidden_size, self.num_labels)
 
 
     def forward(self, input_ids, attention_mask):
@@ -56,8 +57,10 @@ class BertSentimentClassifier(torch.nn.Module):
         # The final BERT contextualized embedding is the hidden state of [CLS] token (the first token).
         # HINT: You should consider what is an appropriate return value given that
         # the training loop currently uses F.cross_entropy as the loss function.
-        ### TODO
-        raise NotImplementedError
+        result = self.bert.forward(input_ids, attention_mask)
+        dropout = self.dropout(result['pooler_output'])
+        projection = self.linear_projection(dropout)
+        return projection
 
 
 
@@ -231,6 +234,7 @@ def save_model(model, optimizer, args, config, filepath):
 
 
 def train(args):
+    
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
     # Create the data and its corresponding datasets and dataloader.
     train_data, num_labels = load_data(args.train, 'train')
@@ -297,6 +301,7 @@ def train(args):
 
 def test(args):
     with torch.no_grad():
+        
         device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
         saved = torch.load(args.filepath)
         config = saved['model_config']
@@ -351,27 +356,6 @@ if __name__ == "__main__":
     args = get_args()
     seed_everything(args.seed)
 
-    print('Training Sentiment Classifier on SST...')
-    config = SimpleNamespace(
-        filepath='sst-classifier.pt',
-        lr=args.lr,
-        use_gpu=args.use_gpu,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        hidden_dropout_prob=args.hidden_dropout_prob,
-        train='data/ids-sst-train.csv',
-        dev='data/ids-sst-dev.csv',
-        test='data/ids-sst-test-student.csv',
-        option=args.option,
-        dev_out = 'predictions/' + args.option + '-sst-dev-out.csv',
-        test_out = 'predictions/' + args.option + '-sst-test-out.csv'
-    )
-
-    train(config)
-
-    print('Evaluating on SST...')
-    test(config)
-
     print('Training Sentiment Classifier on cfimdb...')
     config = SimpleNamespace(
         filepath='cfimdb-classifier.pt',
@@ -392,3 +376,27 @@ if __name__ == "__main__":
 
     print('Evaluating on cfimdb...')
     test(config)
+"""
+    print('Training Sentiment Classifier on SST...')
+    config = SimpleNamespace(
+        filepath='sst-classifier.pt',
+        lr=args.lr,
+        use_gpu=args.use_gpu,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        hidden_dropout_prob=args.hidden_dropout_prob,
+        train='data/ids-sst-train.csv',
+        dev='data/ids-sst-dev.csv',
+        test='data/ids-sst-test-student.csv',
+        option=args.option,
+        dev_out = 'predictions/' + args.option + '-sst-dev-out.csv',
+        test_out = 'predictions/' + args.option + '-sst-test-out.csv'
+    )
+
+    train(config)
+
+    print('Evaluating on SST...')
+    test(config)
+"""
+
+    
