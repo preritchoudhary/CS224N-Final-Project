@@ -50,6 +50,8 @@ class BertSelfAttention(nn.Module):
     #   [bs, seq_len, num_attention_heads * attention_head_size = hidden_size].
     score_matrix_s = torch.matmul(query, torch.transpose(key, 2, 3))
     divided = score_matrix_s/(self.attention_head_size**0.5)
+    print(divided.shape)
+    print(attention_mask.shape)
     mask_scores = divided + attention_mask
     scores = nn.Softmax(dim=-1)
     output = scores(mask_scores)
@@ -126,7 +128,6 @@ class BertLayer(nn.Module):
     add_norm_op = self.add_norm(hidden_states, attention_layer, self.attention_dense, self.attention_dropout, self.attention_layer_norm)
     feed_forward_layer = self.interm_af(self.interm_dense(add_norm_op))
     add_norm_op_two = self.add_norm(add_norm_op, feed_forward_layer, self.out_dense, self.out_dropout, self.out_layer_norm)
-
     return add_norm_op_two
 
 
