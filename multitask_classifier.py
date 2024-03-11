@@ -196,6 +196,8 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=lr)
     best_dev_acc = 0
 
+    # Train semantic text eval with cosine similarity 
+    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -220,7 +222,7 @@ def train_multitask(args):
 
             train_loss += loss.item()
             num_batches += 1
-
+        
         train_loss = train_loss / (num_batches)
 
         train_pearson = model_eval_sts(sts_train_dataloader, model, device)
@@ -231,9 +233,9 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_pearson :.3f}, dev acc :: {dev_pearson :.3f}")
+    """
 
-
-    # Run for the specified number of epochs.
+    # Train just the SST data loader with cross entropy
     """
     for epoch in range(args.epochs):
         model.train()
@@ -267,7 +269,10 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-
+    """ 
+    
+    # Train just para train with cosine similarity 
+    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -305,6 +310,7 @@ def train_multitask(args):
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
     """
 
+    
 def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
     with torch.no_grad():
