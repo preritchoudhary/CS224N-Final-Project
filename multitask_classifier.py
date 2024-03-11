@@ -171,11 +171,8 @@ def train_multitask(args):
                                       collate_fn=sts_train_data.collate_fn)
     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
-    
-    print(sts_train_dataloader)
 
-    
-    
+
 
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
@@ -194,7 +191,6 @@ def train_multitask(args):
     best_dev_acc = 0
 
     # Run for the specified number of epochs.
-    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -227,7 +223,8 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-    """
+    
+
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
