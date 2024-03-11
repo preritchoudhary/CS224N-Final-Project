@@ -32,7 +32,7 @@ from datasets import (
     load_multitask_data
 )
 
-from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask
+from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask, model_eval_sts
 
 
 TQDM_DISABLE=False
@@ -149,7 +149,7 @@ def train_multitask(args):
     look at test_multitask below to see how you can use the custom torch `Dataset`s
     in datasets.py to load in examples from the Quora and SemEval datasets.
     '''
-    device = torch.device('mps') if args.use_gpu else torch.device('cpu')
+    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
     # Create the data and its corresponding datasets and dataloader.
     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
@@ -162,7 +162,6 @@ def train_multitask(args):
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
 
-    # cosine embedding similarity data - will finetune this
     sts_train_data = SentencePairDataset(sts_train_data, args)
     sts_dev_data = SentencePairDataset(sts_dev_data, args)
 
@@ -172,7 +171,14 @@ def train_multitask(args):
     sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
 
+    para_train_data = SentencePairDataset(para_train_data, args)
+    para_dev_data = SentencePairDataset(para_dev_data, args)
 
+
+    para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=sts_train_data.collate_fn)
+    para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=sts_dev_data.collate_fn)
 
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
@@ -190,7 +196,45 @@ def train_multitask(args):
     optimizer = AdamW(model.parameters(), lr=lr)
     best_dev_acc = 0
 
+    for epoch in range(args.epochs):
+        model.train()
+        train_loss = 0
+        num_batches = 0
+        for batch in tqdm(sts_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+            b_ids1, b_ids2, b_mask1, b_mask2, b_labels = (batch['token_ids_1'], batch['token_ids_2'],
+                                       batch['attention_mask_1'], batch['attention_mask_2'], batch['labels'])
+            
+            b_ids1 = b_ids1.to(device)
+            b_ids2 = b_ids2.to(device)
+            b_mask1 = b_mask1.to(device)
+            b_mask2 = b_mask2.to(device)
+            b_labels = b_labels.to(device).float()
+    
+            optimizer.zero_grad()
+            single_logit = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+            mean_square = torch.nn.MSELoss()
+            loss = mean_square(single_logit, b_labels.view(-1))
+
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            num_batches += 1
+
+        train_loss = train_loss / (num_batches)
+
+        train_pearson = model_eval_sts(sts_train_dataloader, model, device)
+        dev_pearson = model_eval_sts(sts_dev_dataloader, model, device)
+
+        if dev_pearson > best_dev_acc:
+            best_dev_acc = dev_pearson
+            save_model(model, optimizer, args, config, args.filepath)
+
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_pearson :.3f}, dev acc :: {dev_pearson :.3f}")
+
+
     # Run for the specified number of epochs.
+    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -223,15 +267,14 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-    
 
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
         num_batches = 0
-        for batch in tqdm(sts_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        for batch in tqdm(para_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
             b_ids1, b_ids2, b_mask1, b_mask2, b_labels = (batch['token_ids_1'], batch['token_ids_2'],
-                                       batch['attention_mask_1'], batch['attention_mask_2'], batch['labels'])
+                                    batch['attention_mask_1'], batch['attention_mask_2'], batch['labels'])
             
             b_ids1 = b_ids1.to(device)
             b_ids2 = b_ids2.to(device)
@@ -240,7 +283,7 @@ def train_multitask(args):
             b_labels = b_labels.to(device).float()
     
             optimizer.zero_grad()
-            single_logit = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
+            single_logit = model.predict_paraphrase(b_ids1, b_mask1, b_ids2, b_mask2)
             mean_square = torch.nn.MSELoss()
             loss = mean_square(single_logit, b_labels.view(-1))
 
@@ -252,15 +295,15 @@ def train_multitask(args):
 
         train_loss = train_loss / (num_batches)
 
-        train_acc, train_f1, *_ = model_eval_multitask(sts_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_multitask(sts_dev_dataloader, model, device)
+        train_acc, train_f1, *_ = model_eval_multitask(para_train_dataloader, model, device)
+        dev_acc, dev_f1, *_ = model_eval_multitask(para_dev_dataloader, model, device)
 
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-
+    """
 
 def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
