@@ -106,11 +106,10 @@ class MultitaskBERT(nn.Module):
         Note that your output should be unnormalized (a logit); it will be passed to the sigmoid function
         during evaluation.
         '''
-        ### TODO
         result_one = self.forward(input_ids_1, attention_mask_1)
         result_two = self.forward(input_ids_2, attention_mask_2)
-        cosine_similarity = self.cosine_loss(result_one, result_two)
-        logit = self.cosine_to_sim_para(cosine_similarity)
+        cosine_similarity = self.cosine_loss(result_one, result_two).unsqueeze(-1)
+        logit = self.cosine_to_sim_para(cosine_similarity).squeeze(1)
         return logit
 
 
@@ -153,6 +152,9 @@ def train_multitask(args):
     # Create the data and its corresponding datasets and dataloader.
     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
+
+    sst_train_data = sst_train_data[: len(sts_train_data)]
+    para_train_data = para_train_data[: len(sts_train_data)]
 
     sst_train_data = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
@@ -236,7 +238,7 @@ def train_multitask(args):
     """
 
     # Train just the SST data loader with cross entropy
-    """
+    """"
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -269,7 +271,8 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-    """ 
+        print(num_batches)
+    """
     
     # Train just para train with cosine similarity 
     """
@@ -310,7 +313,64 @@ def train_multitask(args):
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
     """
 
+    # Mutltibatch training with multitask fine tuning
+    for epoch in range(args.epochs):
+        model.train()
+        train_loss = 0
+        num_batches = 0
+        for batch_sst, batch_para, batch_sts in tqdm(zip(sst_train_dataloader, para_train_dataloader, sts_train_dataloader), desc=f'train-{epoch}', disable=TQDM_DISABLE):
+            b_sst_ids, b_sst_mask, b_sst_labels = (batch_sst['token_ids'],
+                                       batch_sst['attention_mask'], batch_sst['labels'])
+            
+            b_sts_ids1, b_sts_ids2, b_sts_mask1, b_sts_mask2, b_sts_labels = (batch_sts['token_ids_1'], batch_sts['token_ids_2'],
+                                    batch_sts['attention_mask_1'], batch_sts['attention_mask_2'], batch_sts['labels'])
+            
+            b_para_ids1, b_para_ids2, b_para_mask1, b_para_mask2, b_para_labels = (batch_para['token_ids_1'], batch_para['token_ids_2'],
+                                    batch_para['attention_mask_1'], batch_para['attention_mask_2'], batch_para['labels'])
+            
+            
+            b_sts_ids1 = b_sts_ids1.to(device)
+            b_sts_ids2 = b_sts_ids2.to(device)
+            b_sts_mask1 = b_sts_mask1.to(device)
+            b_sts_mask2 = b_sts_mask2.to(device)
+            b_sts_labels = b_sts_labels.to(device).float()
+            b_para_ids1 = b_para_ids1.to(device)
+            b_para_ids2 = b_para_ids2.to(device)
+            b_para_mask1 = b_para_mask1.to(device)
+            b_para_mask2 = b_para_mask2.to(device)
+            b_para_labels = b_para_labels.to(device).float()
+            b_sst_ids = b_sst_ids.to(device)
+            b_sst_mask = b_sst_mask.to(device)
+            b_sst_labels = b_sst_labels.to(device)
     
+            optimizer.zero_grad()
+            sst_logits = model.predict_sentiment(b_sst_ids, b_sst_mask)
+            para_logit = model.predict_paraphrase(b_para_ids1, b_para_mask1, b_para_ids2, b_para_mask2)
+            sts_logit = model.predict_similarity(b_sts_ids1, b_sts_mask1, b_sts_ids2, b_sts_mask2)
+            mean_square = torch.nn.MSELoss()
+            sts_loss = mean_square(sts_logit, b_para_labels.view(-1)) / args.batch_size
+            para_loss = mean_square(para_logit, b_para_labels.view(-1)) / args.batch_size
+            sentiment_loss = F.cross_entropy(sst_logits, b_sst_labels.view(-1), reduction='sum') / args.batch_size
+
+            loss = para_loss + sts_loss + sentiment_loss
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            num_batches += 1
+
+        train_loss = train_loss / (num_batches)
+
+        train_acc, train_f1, *_ = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
+        dev_acc, dev_f1, *_ = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
+
+        if dev_acc > best_dev_acc:
+            best_dev_acc = dev_acc
+            save_model(model, optimizer, args, config, args.filepath)
+
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+
+
 def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
     with torch.no_grad():
