@@ -50,8 +50,6 @@ class BertSelfAttention(nn.Module):
     #   [bs, seq_len, num_attention_heads * attention_head_size = hidden_size].
     score_matrix_s = torch.matmul(query, torch.transpose(key, 2, 3))
     divided = score_matrix_s/(self.attention_head_size**0.5)
-    print(divided.shape)
-    print(attention_mask.shape)
     mask_scores = divided + attention_mask
     scores = nn.Softmax(dim=-1)
     output = scores(mask_scores)

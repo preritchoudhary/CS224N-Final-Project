@@ -75,7 +75,7 @@ class MultitaskBERT(nn.Module):
         self.sentiment_projection_layer = torch.nn.Linear(BERT_HIDDEN_SIZE, N_SENTIMENT_CLASSES)    
         self.cosine_to_sim_logit = torch.nn.Linear(1, 1)
         self.cosine_to_sim_para = torch.nn.Linear(1, 1)
-        self.cosine_loss = torch.nn.CosineEmbeddingLoss()
+        self.cosine_loss = torch.nn.CosineSimilarity()
 
 
     def forward(self, input_ids, attention_mask):
@@ -122,8 +122,8 @@ class MultitaskBERT(nn.Module):
         '''
         result_one = self.forward(input_ids_1, attention_mask_1)
         result_two = self.forward(input_ids_2, attention_mask_2)
-        cosine_similarity = self.cosine_loss(result_one, result_two)
-        logit = self.cosine_to_sim_logit(cosine_similarity)
+        cosine_similarity = self.cosine_loss(result_one, result_two).unsqueeze(-1)
+        logit = self.cosine_to_sim_logit(cosine_similarity).squeeze(1)
         return logit
 
 def save_model(model, optimizer, args, config, filepath):
@@ -228,7 +228,6 @@ def train_multitask(args):
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
     """
-
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -241,13 +240,10 @@ def train_multitask(args):
             b_ids2 = b_ids2.to(device)
             b_mask1 = b_mask1.to(device)
             b_mask2 = b_mask2.to(device)
-            b_labels = b_labels.to(device)
-
-            print(b_ids1)
-            print(b_mask1)
-            
+            b_labels = b_labels.to(device).float()
+    
             optimizer.zero_grad()
-            single_logit = model.predict_similarity(b_ids1, b_ids2, b_mask1, b_mask2)
+            single_logit = model.predict_similarity(b_ids1, b_mask1, b_ids2, b_mask2)
             mean_square = torch.nn.MSELoss()
             loss = mean_square(single_logit, b_labels.view(-1))
 
