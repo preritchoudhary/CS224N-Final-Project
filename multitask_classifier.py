@@ -155,10 +155,20 @@ def train_multitask(args):
     sst_train_data = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
 
+    # cosine embedding similarity data - will finetune this
+    sts_train_data = SentencePairDataset(sts_train_data, args, isRegression=True)
+    sts_train_dataloader = DataLoader(sts_train_data, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=sts_train_data.collate_fn)
+    sts_dev_dataloader = DataLoader(sts_dev_data, shuffle=False, batch_size=args.batch_size,
+                                    collate_fn=sts_dev_data.collate_fn)
+    
+    print(sts_train_dataloader)
+
     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
                                       collate_fn=sst_train_data.collate_fn)
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
+    
 
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
@@ -203,6 +213,44 @@ def train_multitask(args):
 
         train_acc, train_f1, *_ = model_eval_sst(sst_train_dataloader, model, device)
         dev_acc, dev_f1, *_ = model_eval_sst(sst_dev_dataloader, model, device)
+
+        if dev_acc > best_dev_acc:
+            best_dev_acc = dev_acc
+            save_model(model, optimizer, args, config, args.filepath)
+
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+
+    for epoch in range(args.epochs):
+        model.train()
+        train_loss = 0
+        num_batches = 0
+        for batch in tqdm(sts_train_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+            print(batch)
+            b_ids1, b_ids2, b_mask1, b_mask2, b_labels = (batch['token_ids1'], batch['token_ids2'],
+                                       batch['attention_mask1'], batch['attention_mask2'], batch['labels'])
+            
+            b_ids1 = b_ids1.to(device)
+            b_ids2 = b_ids2.to(device)
+            b_mask1 = b_mask1.to(device)
+            b_mask2 = b_mask2.to(device)
+            b_labels = b_labels.to(device)
+
+            optimizer.zero_grad()
+            single_logit, (embeddings1, embeddings2) = model.predict_similarity(b_ids1, b_ids2, b_mask1, b_mask2)
+           
+            cos_loss = torch.nn.CosineEmbeddingLoss()
+            loss = cos_loss(embeddings1, embeddings2)
+
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+            num_batches += 1
+
+        train_loss = train_loss / (num_batches)
+
+        train_acc, train_f1, *_ = model_eval_multitask(sts_train_dataloader, model, device)
+        dev_acc, dev_f1, *_ = model_eval_multitask(sts_dev_dataloader, model, device)
 
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
