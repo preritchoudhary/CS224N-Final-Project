@@ -85,8 +85,7 @@ class MultitaskBERT(nn.Module):
         # When thinking of improvements, you can later try modifying this
         # (e.g., by adding other layers).
         result = self.bert.forward(input_ids, attention_mask)
-        dropout = self.dropout(result['pooler_output'])
-        return dropout
+        return result['pooler_output']
 
 
     def predict_sentiment(self, input_ids, attention_mask):
@@ -351,9 +350,40 @@ def train_multitask(args):
             sts_loss = mean_square(sts_logit, b_para_labels.view(-1)) / args.batch_size
             para_loss = mean_square(para_logit, b_para_labels.view(-1)) / args.batch_size
             sentiment_loss = F.cross_entropy(sst_logits, b_sst_labels.view(-1), reduction='sum') / args.batch_size
+            loss = (para_loss + sts_loss + sentiment_loss) / 3
 
-            loss = para_loss + sts_loss + sentiment_loss
-            loss.backward()
+            grad_arr = []
+            grad_proj = []
+            
+            sentiment_loss.backward(retain_graph=True)
+            sentiment_grads = [param.grad.clone() for param in model.parameters()]
+            optimizer.zero_grad()  
+            grad_arr.append(sentiment_grads)
+    
+            para_loss.backward(retain_graph=True)
+            para_grads = [param.grad.clone() for param in model.parameters()]
+            optimizer.zero_grad()  
+            grad_arr.append(para_grads)
+            
+            sts_loss.backward(retain_graph=True)
+            sts_grads = [param.grad.clone() for param in model.parameters()]
+            optimizer.zero_grad()  
+            grad_arr.append(sts_grads)
+
+            for i in range(len(grad_arr)):
+                grad_pc = grad_arr[i]
+                for j in range(len(grad_arr)):
+                    if j != i:
+                        cos_sim = np.dot(grad_pc, grad_arr[j])/(np.linalg.norm(grad_pc) * np.linalg(grad_arr[j]))
+                        if cos_sim < 0:
+                            grad_pc = grad_pc - (np.dot(grad_pc, grad_arr[j])/(np.linalg.norm(grad_arr[j]) * np.linalg(grad_arr[j]))) * grad_arr[j]
+                
+                grad_proj.append(grad_pc)
+
+            sum_grad_proj = np.sum(grad_proj)
+            for i, param in enumerate(model.parameters()):
+                param.grad = sum_grad_proj[i]
+
             optimizer.step()
 
             train_loss += loss.item()
@@ -361,20 +391,25 @@ def train_multitask(args):
 
         train_loss = train_loss / (num_batches)
 
-        train_acc, train_f1, *_ = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
+        train_acc_sst, train_f1, *_ = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
+        dev_acc_sst, dev_f1, *_ = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
 
+        train_sentiment_accuracy,sst_y_pred, sst_sent_ids, train_paraphrase_accuracy, para_y_pred, para_sent_ids, train_sts_corr, sts_y_pred, sts_sent_ids = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
+        dev_sentiment_accuracy,sst_y_pred, sst_sent_ids, dev_paraphrase_accuracy, para_y_pred, para_sent_ids, dev_sts_corr, sts_y_pred, sts_sent_ids = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
+
+        dev_acc = dev_sentiment_accuracy + dev_paraphrase_accuracy + dev_sts_corr
+        
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
 
-        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc_sentiment :: {train_sentiment_accuracy :.3f}, train_acc_para :: {train_paraphrase_accuracy :.3f,}, train_acc_sts :: {train_sts_corr :.3f,}, dev acc :: {dev_acc :.3f}")
 
 
 def test_multitask(args):
     '''Test and save predictions on the dev and test sets of all three tasks.'''
     with torch.no_grad():
-        device = torch.device('mps') if args.use_gpu else torch.device('cpu')
+        device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
         saved = torch.load(args.filepath)
         config = saved['model_config']
 
