@@ -24,6 +24,7 @@ from bert import BertModel
 from optimizer import AdamW
 from tqdm import tqdm
 from PytorchPCGrad.pcgrad import PCGrad
+import torch_optimizer
 
 from datasets import (
     SentenceClassificationDataset,
@@ -205,6 +206,8 @@ def train_multitask(args):
 
     lr = args.lr
     optimizer = PCGrad(AdamW(model.parameters(), lr=lr))
+    adam_optimizer = torch_optimizer.RAdam(model.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0)
+    optimizer = PCGrad(torch_optimizer.Lookahead(adam_optimizer, k=5, alpha=0.5))
     best_dev_acc = 0
 
     # Train semantic text eval with cosine similarity 
