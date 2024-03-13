@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader
 from bert import BertModel
 from optimizer import AdamW
 from tqdm import tqdm
+from PytorchPCGrad.pcgrad import PCGrad
 
 from datasets import (
     SentenceClassificationDataset,
@@ -32,7 +33,7 @@ from datasets import (
     load_multitask_data
 )
 
-from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask, model_eval_sts
+from evaluation import model_eval_sst, model_eval_multitask, model_eval_test_multitask, model_eval_sts, model_eval_para
 
 
 TQDM_DISABLE=False
@@ -152,16 +153,21 @@ def train_multitask(args):
     sst_train_data, num_labels,para_train_data, sts_train_data = load_multitask_data(args.sst_train,args.para_train,args.sts_train, split ='train')
     sst_dev_data, num_labels,para_dev_data, sts_dev_data = load_multitask_data(args.sst_dev,args.para_dev,args.sts_dev, split ='train')
 
-    sst_train_data = sst_train_data[: len(sts_train_data)]
-    para_train_data = para_train_data[: len(sts_train_data)]
+    sst_train_data_multi = sst_train_data[: len(sts_train_data)]
+    para_train_data_multi = para_train_data[: len(sts_train_data)]
 
     sst_train_data = SentenceClassificationDataset(sst_train_data, args)
     sst_dev_data = SentenceClassificationDataset(sst_dev_data, args)
+
+    sst_train_data_multi = SentenceClassificationDataset(sst_train_data_multi, args)
 
     sst_train_dataloader = DataLoader(sst_train_data, shuffle=True, batch_size=args.batch_size,
                                       collate_fn=sst_train_data.collate_fn)
     sst_dev_dataloader = DataLoader(sst_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sst_dev_data.collate_fn)
+    
+    sst_train_multi_dataloader = DataLoader(sst_train_data_multi, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=sst_train_data_multi.collate_fn)
 
     sts_train_data = SentencePairDataset(sts_train_data, args)
     sts_dev_data = SentencePairDataset(sts_dev_data, args)
@@ -174,12 +180,16 @@ def train_multitask(args):
 
     para_train_data = SentencePairDataset(para_train_data, args)
     para_dev_data = SentencePairDataset(para_dev_data, args)
-
+    para_train_data_multi = SentencePairDataset(para_train_data_multi, args)
 
     para_train_dataloader = DataLoader(para_train_data, shuffle=True, batch_size=args.batch_size,
                                       collate_fn=sts_train_data.collate_fn)
     para_dev_dataloader = DataLoader(para_dev_data, shuffle=False, batch_size=args.batch_size,
                                     collate_fn=sts_dev_data.collate_fn)
+    
+    para_train_multi_dataloader = DataLoader(para_train_data_multi, shuffle=True, batch_size=args.batch_size,
+                                      collate_fn=sts_train_data.collate_fn)
+    
 
     # Init model.
     config = {'hidden_dropout_prob': args.hidden_dropout_prob,
@@ -194,11 +204,10 @@ def train_multitask(args):
     model = model.to(device)
 
     lr = args.lr
-    optimizer = AdamW(model.parameters(), lr=lr)
+    optimizer = PCGrad(AdamW(model.parameters(), lr=lr))
     best_dev_acc = 0
 
     # Train semantic text eval with cosine similarity 
-    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -234,10 +243,9 @@ def train_multitask(args):
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_pearson :.3f}, dev acc :: {dev_pearson :.3f}")
-    """
+
 
     # Train just the SST data loader with cross entropy
-    """"
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -271,10 +279,8 @@ def train_multitask(args):
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
         print(num_batches)
-    """
     
     # Train just para train with cosine similarity 
-    """
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
@@ -302,22 +308,21 @@ def train_multitask(args):
 
         train_loss = train_loss / (num_batches)
 
-        train_acc, train_f1, *_ = model_eval_multitask(para_train_dataloader, model, device)
-        dev_acc, dev_f1, *_ = model_eval_multitask(para_dev_dataloader, model, device)
+        train_acc, train_f1, *_ = model_eval_para(para_train_dataloader, model, device)
+        dev_acc, dev_f1, *_ = model_eval_para(para_dev_dataloader, model, device)
 
         if dev_acc > best_dev_acc:
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
 
         print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
-    """
 
     # Mutltibatch training with multitask fine tuning
     for epoch in range(args.epochs):
         model.train()
         train_loss = 0
         num_batches = 0
-        for batch_sst, batch_para, batch_sts in tqdm(zip(sst_train_dataloader, para_train_dataloader, sts_train_dataloader), desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        for batch_sst, batch_para, batch_sts in tqdm(zip(sst_train_multi_dataloader, para_train_multi_dataloader, sts_train_dataloader), desc=f'train-{epoch}', disable=TQDM_DISABLE):
             b_sst_ids, b_sst_mask, b_sst_labels = (batch_sst['token_ids'],
                                        batch_sst['attention_mask'], batch_sst['labels'])
             
@@ -351,7 +356,9 @@ def train_multitask(args):
             para_loss = mean_square(para_logit, b_para_labels.view(-1)) / args.batch_size
             sentiment_loss = F.cross_entropy(sst_logits, b_sst_labels.view(-1), reduction='sum') / args.batch_size
             loss = (para_loss + sts_loss + sentiment_loss) / 3
+            grad_surg = [sts_loss, para_loss, sentiment_loss]
 
+            """
             grad_arr = []
             grad_proj = []
             
@@ -384,6 +391,8 @@ def train_multitask(args):
             for i, param in enumerate(model.parameters()):
                 param.grad = sum_grad_proj[i]
 
+            """
+            optimizer.pc_backward(grad_surg)
             optimizer.step()
 
             train_loss += loss.item()
@@ -391,8 +400,8 @@ def train_multitask(args):
 
         train_loss = train_loss / (num_batches)
 
-        train_acc_sst, train_f1, *_ = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
-        dev_acc_sst, dev_f1, *_ = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
+        # train_acc_sst, train_f1, *_ = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
+        # dev_acc_sst, dev_f1, *_ = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
 
         train_sentiment_accuracy,sst_y_pred, sst_sent_ids, train_paraphrase_accuracy, para_y_pred, para_sent_ids, train_sts_corr, sts_y_pred, sts_sent_ids = model_eval_multitask(sst_train_dataloader, para_train_dataloader, sts_train_dataloader, model, device)
         dev_sentiment_accuracy,sst_y_pred, sst_sent_ids, dev_paraphrase_accuracy, para_y_pred, para_sent_ids, dev_sts_corr, sts_y_pred, sts_sent_ids = model_eval_multitask(sst_dev_dataloader, para_dev_dataloader, sts_dev_dataloader, model, device)
@@ -403,7 +412,7 @@ def train_multitask(args):
             best_dev_acc = dev_acc
             save_model(model, optimizer, args, config, args.filepath)
 
-        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc_sentiment :: {train_sentiment_accuracy :.3f}, train_acc_para :: {train_paraphrase_accuracy :.3f,}, train_acc_sts :: {train_sts_corr :.3f,}, dev acc :: {dev_acc :.3f}")
+        print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc_sentiment :: {train_sentiment_accuracy :.3f}, train_acc_para :: {train_paraphrase_accuracy :.3f}, train_acc_sts :: {train_sts_corr :.3f}, dev acc :: {dev_acc :.3f}")
 
 
 def test_multitask(args):
